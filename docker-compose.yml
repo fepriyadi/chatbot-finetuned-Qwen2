@@ -1,0 +1,67 @@
+services:
+  vllm:
+    image: vllm/vllm-openai:${VLLM_IMAGE_TAG:-v0.11.0}
+    # Model GRPO di-push sebagai merged_16bit -> langsung di-serve tanpa konversi.
+    # float16 (bukan bf16) agar jalan di T4; di L4/A10 juga aman.
+    command:
+      - --model=${LLM_MODEL:-Fepriyadi/Qwen2.5-3B-Instruct-Alpaca-ID-GRPO}
+      - --dtype=half
+      - --max-model-len=4096
+      - --gpu-memory-utilization=${VLLM_GPU_MEMORY_UTILIZATION:-0.6}
+      - --host=0.0.0.0
+      - --port=8000
+    environment:
+      HF_TOKEN: ${HF_TOKEN:-}
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+    ipc: host
+    ports:
+      - "127.0.0.1:8000:8000"   # hanya untuk debug dari host; app memakai jaringan internal compose
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 40
+      start_period: 300s        # unduh bobot ~6 GB pada start pertama
+    restart: unless-stopped
+
+  app:
+    build: .
+    depends_on:
+      vllm:
+        condition: service_healthy   # vLLM mengalokasikan VRAM lebih dulu, sisanya untuk bge-m3 + reranker
+    environment:
+      VLLM_BASE_URL: http://vllm:8000/v1
+      LLM_MODEL: ${LLM_MODEL:-Fepriyadi/Qwen2.5-3B-Instruct-Alpaca-ID-GRPO}
+      HF_TOKEN: ${HF_TOKEN:-}
+      RERANK_THRESHOLD: ${RERANK_THRESHOLD:-0.05}
+    volumes:
+      - ./data:/app/data             # PDF, ChromaDB, parents.jsonl (hasil ingest, bertahan antar restart)
+      - hf-cache:/root/.cache/huggingface
+    ports:
+      - "8501:8501"
+    # Hapus blok deploy ini untuk menjalankan embedding + reranker di CPU (lebih lambat).
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 900s        # start pertama menjalankan ingest (embedding semua child chunk)
+    restart: unless-stopped
+
+volumes:
+  hf-cache:
