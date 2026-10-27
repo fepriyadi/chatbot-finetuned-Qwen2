@@ -24,6 +24,7 @@ legal_rag/
     pipeline.py     LegalRAG: ensemble → rerank → threshold/DuckDuckGo → LLM, citations
     ingest.py       build the index once
     calibrate.py    re-check RERANK_THRESHOLD on the deployment hardware
+    build_sft_data.py  RAG worked-example dataset for a short SFT on top of the GRPO model
 streamlit_app.py    chat UI
 ```
 
@@ -38,7 +39,12 @@ streamlit_app.py    chat UI
 
 The `<think>\n` prefill is kept: the prompt is rendered locally with the model's chat template and sent to
 vLLM's `/v1/completions` (chat completions cannot prefill the assistant turn). HyDE's
-`num_return_sequences=2` becomes `n=2`. Sampling params (`top_p=0.9`, `repetition_penalty=1.1`) match the notebook.
+`num_return_sequences=2` becomes `n=2`. Sampling params (`top_p=0.9`, `repetition_penalty=1.0`) match the notebook.
+
+`RAG_PROMPT` makes the model quote the relevant pasal (with its `[n]`) inside `<think>` before concluding, and
+`repetition_penalty` is 1.0 because a penalty above 1 also counts prompt tokens, so copying the context was penalised.
+Without both, the model paraphrased PP 35/2021 Pasal 26 ayat (1) "paling lama 4 jam" (at most) as "4 jam atau lebih"
+(at least) and told the 3-hour overtime test case it was not entitled, although Pasal 27 ayat (1) requires payment.
 
 ## Deploy (GPU VM: AWS g4dn / GCP T4 / L4 / Vast.ai / …)
 
@@ -81,6 +87,43 @@ then `docker compose restart app`.
 
 `vllm` starts first (`depends_on: service_healthy`) so it reserves its share before the app loads its models.
 To run embeddings + reranker on CPU instead, delete the `deploy:` block under `app` (queries and the first ingest become much slower).
+
+## RAG SFT dataset
+
+The prompt fix made the model quote PP 35/2021 Pasal 26 ayat (1) correctly, but it still concluded
+"3 jam tidak termasuk dalam batas". Neither training stage ever showed it a RAG prompt (GRPO kept prompts
+≤ 256 tokens), so `legal_rag.build_sft_data` builds worked examples from the four PDFs:
+
+1. parent chunks with a numeric limit ("paling lama 5 (lima) tahun"); chunks mentioning "lembur" are held out
+   because the overtime question is the test case
+2. the teacher, open-source `Qwen/Qwen2.5-32B-Instruct-AWQ` served by vLLM with JSON-schema output, copies the
+   right/obligation, limit, and exception sentences verbatim and writes questions inside the limit, past it, and
+   hitting the exception
+3. each question goes through the real retrieval (filter → HyDE → ensemble → rerank Top-3)
+4. the `<think>` target is assembled by code: quotes with `[n]`, `fakta ≤ batas → …`, conclusion, `Jawaban: Ya/Tidak`
+5. an example is dropped unless every quote is verbatim in the context, `[n]` and the pasal match, and the
+   label agrees with the numbers
+
+The 32B teacher (~19 GB in 4-bit) and the GRPO model don't fit on Kaggle's 2×T4 at the same time, so the run is
+split into two stages:
+
+```bash
+python -m legal_rag.build_sft_data --dry-run                 # candidate chunks only
+
+# stage 1: teacher (steps 1-2), on port 8001
+vllm serve Qwen/Qwen2.5-32B-Instruct-AWQ --port 8001 --tensor-parallel-size 2 --quantization awq \
+    --dtype half --max-model-len 8192 --gpu-memory-utilization 0.92
+python -m legal_rag.build_sft_data --stage teacher --limit 10   # trial: check the yield first
+python -m legal_rag.build_sft_data --stage teacher
+
+# stage 2: stop the teacher, start the GRPO model on :8000 (HyDE), then steps 3-5
+python -m legal_rag.build_sft_data --stage build              # --no-hyde if the GRPO vLLM isn't running
+```
+
+`TEACHER_BASE_URL` / `TEACHER_MODEL` override the teacher endpoint. T4 has no bf16 and no Marlin kernels, hence
+`--dtype half --quantization awq`. Output goes to `data/rag_sft/` (`train.jsonl`, `eval.jsonl`, `rejects.jsonl`,
+`teacher_cache.jsonl`). The train/eval split is by source chunk, so variants of one rule never land on both sides.
+Teacher results are cached, so a rerun only repeats the calls that failed.
 
 ## Local development (macOS, no NVIDIA GPU)
 

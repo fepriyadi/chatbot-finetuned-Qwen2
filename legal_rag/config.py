@@ -62,6 +62,10 @@ VLLM_API_KEY = os.environ.get("VLLM_API_KEY", "EMPTY")
 LLM_MODEL = os.environ.get("LLM_MODEL", "Fepriyadi/Qwen2.5-3B-Instruct-Alpaca-ID-GRPO")
 HF_TOKEN = os.environ.get("HF_TOKEN") or None
 
+# --- Teacher dataset SFT RAG (hanya legal_rag.build_sft_data; server vLLM terpisah dari model GRPO) ---
+TEACHER_BASE_URL = os.environ.get("TEACHER_BASE_URL", "http://localhost:8001/v1")
+TEACHER_MODEL = os.environ.get("TEACHER_MODEL", "Qwen/Qwen2.5-32B-Instruct-AWQ")
+
 # --- Prompt (sama persis dengan notebook RAG / GRPO) ---
 THINK_SYSTEM_PROMPT = (
     "Anda adalah asisten AI berbahasa Indonesia. Sebelum menjawab, tuliskan proses berpikir Anda "
@@ -75,9 +79,22 @@ RAG_SYSTEM_PROMPT = THINK_SYSTEM_PROMPT + (
     "yang diberikan dan cantumkan nomor sumber seperti [1] atau [2] di jawaban akhir."
 )
 
+# Kutip dulu, baru simpulkan. Tanpa langkah ini model memparafrasekan pasal dari ingatan dan pernah membalik syarat
+# PP 35/2021 Pasal 26 ayat (1) "paling lama 4 jam" (maksimal) menjadi "4 jam atau lebih", sehingga lembur 3 jam
+# dijawab "tidak berhak" padahal Pasal 27 ayat (1) mewajibkan Upah Kerja Lembur. Jawaban akhirnya juga bertentangan
+# dengan <think> ("tidak dapat menentukan" lalu "tidak berhak"), maka "tidak ditemukan" hanya untuk kasus tanpa kutipan.
 RAG_PROMPT = """Gunakan HANYA konteks berikut untuk menjawab pertanyaan.
-Setiap potongan konteks diberi nomor sumber [n]. Sebutkan nama peraturan, pasal, dan nomor sumber yang Anda pakai.
-Jika konteks tidak memuat jawabannya, katakan bahwa informasi tersebut tidak ditemukan di dokumen.
+Setiap potongan konteks diberi nomor sumber [n].
+
+Di dalam <think>, kerjakan tiga langkah ini:
+1. Kutip kata demi kata kalimat pasal yang relevan beserta nomor sumbernya, misalnya: [2] Pasal 26 ayat (1): "...".
+2. Cocokkan fakta pada pertanyaan (angka, jabatan, waktu) dengan syarat di kutipan. Perhatikan kata batas:
+   "paling lama" berarti maksimal, "paling sedikit" berarti minimal.
+3. Tulis kesimpulan.
+
+Setelah </think>, tulis jawaban akhir yang sama dengan kesimpulan di <think>, lalu sebutkan nama peraturan,
+pasal, dan nomor sumber [n] yang Anda pakai.
+Hanya jika langkah 1 tidak menemukan kutipan yang relevan, katakan bahwa informasi tersebut tidak ditemukan di dokumen.
 
 Konteks:
 {context}

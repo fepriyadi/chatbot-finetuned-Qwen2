@@ -32,7 +32,9 @@ class VLLMClient:
             temperature=temperature,   # 0 -> greedy, sama dengan do_sample=False
             top_p=0.9,
             n=num_return_sequences,
-            extra_body={"repetition_penalty": 1.1, "add_special_tokens": False, "skip_special_tokens": True},
+            # repetition_penalty 1.0 = tanpa penalti. Penalti > 1 juga berlaku pada token prompt, sehingga menyalin
+            # kalimat pasal dari konteks justru dihukum dan model memilih parafrase (sumber salah baca "paling lama 4 jam").
+            extra_body={"repetition_penalty": 1.0, "add_special_tokens": False, "skip_special_tokens": True},
         )
         choices = sorted(response.choices, key=lambda c: c.index)
         return [assistant_prefix + c.text for c in choices]
