@@ -62,10 +62,6 @@ VLLM_API_KEY = os.environ.get("VLLM_API_KEY", "EMPTY")
 LLM_MODEL = os.environ.get("LLM_MODEL", "Fepriyadi/Qwen2.5-3B-Instruct-Alpaca-ID-GRPO")
 HF_TOKEN = os.environ.get("HF_TOKEN") or None
 
-# --- Teacher dataset SFT RAG (hanya legal_rag.build_sft_data; server vLLM terpisah dari model GRPO) ---
-TEACHER_BASE_URL = os.environ.get("TEACHER_BASE_URL", "http://localhost:8001/v1")
-TEACHER_MODEL = os.environ.get("TEACHER_MODEL", "Qwen/Qwen2.5-32B-Instruct-AWQ")
-
 # --- Prompt (sama persis dengan notebook RAG / GRPO) ---
 THINK_SYSTEM_PROMPT = (
     "Anda adalah asisten AI berbahasa Indonesia. Sebelum menjawab, tuliskan proses berpikir Anda "
